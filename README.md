@@ -42,8 +42,11 @@ examples:
 - CPUs are grouped by shared L3 and treated as clusters.
 - Tags such as `lowest-perf-cores` and `highest-perf-cores` are assigned at cluster level.
 - Performance ranking is based on ACPI CPPC `highest_perf`.
+- `amd_pstate_max_freq_mhz` is shown in topology output when available, but it is informational only and does not participate in tag assignment.
 - Cache-related tags such as `most-cache` and `most-cache-per-core` are exposed separately.
 - `all-cores` is a special tag meaning the full online CPU mask, not a single cluster.
+
+On the Zen5 samples I tested, `amd_pstate_max_freq` was the only frequency-related field that reflected the hardware maximum even when the active cpufreq policy was capping the current maximum. Fields such as `scaling_max_freq`, and in those samples also `cpuinfo_max_freq`, reflected the active cap instead. For that reason the tool shows `amd_pstate_max_freq_mhz` when it is exposed, but performance tags still rely only on ACPI CPPC.
 
 ## Tags
 
@@ -123,6 +126,7 @@ This is the cleaner integration because the service starts already pinned, inste
 - `--topology` prints YAML-like output by default and JSON with `--json`.
 - `--pid` and `--comm` print per-process update reports in YAML-like form by default and JSON with `--json`.
 - Command launch mode does not print YAML or JSON.
+- `amd_pstate_max_freq_mhz` is optional and appears only on systems that expose `amd_pstate_max_freq`.
 
 ## Build
 

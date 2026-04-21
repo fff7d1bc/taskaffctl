@@ -49,6 +49,30 @@ func TestResolveClusterSelectionRejectsUnavailableTag(t *testing.T) {
 	}
 }
 
+func TestResolveClusterSelectionRejectsTopologyWithoutUniqueTags(t *testing.T) {
+	topo := &Topology{
+		Clusters: []Cluster{
+			{
+				CPUs:              mustParseCPUSet(t, "0-1"),
+				HighestPerf:       map[int]int{0: 150, 1: 150},
+				L3SizeBytes:       16 * 1024 * 1024,
+				PhysicalCoreCount: 2,
+			},
+			{
+				CPUs:              mustParseCPUSet(t, "2-3"),
+				HighestPerf:       map[int]int{2: 150, 3: 150},
+				L3SizeBytes:       16 * 1024 * 1024,
+				PhysicalCoreCount: 2,
+			},
+		},
+	}
+
+	_, err := ResolveClusterSelection(topo, "lowest-perf-cores")
+	if err == nil || !strings.Contains(err.Error(), "no unique cluster tags are available") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestBuildClusterTagsIncludesUnassigned(t *testing.T) {
 	root := t.TempDir()
 	writeCPUFixture(t, root, 0, "0-1", "16384K", "200")
@@ -107,6 +131,60 @@ func TestBuildClusterTagsSkipsPerfTagsWhenCPPCIsIncomplete(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(tags.Unassigned, ","), "lowest-perf-cores") {
 		t.Fatalf("expected lowest-perf-cores to be unassigned, got %v", tags.Unassigned)
+	}
+}
+
+func TestBuildClusterTagsReportsNoAssignedClusterTags(t *testing.T) {
+	topo := &Topology{
+		Clusters: []Cluster{
+			{
+				CPUs:              mustParseCPUSet(t, "0-1"),
+				HighestPerf:       map[int]int{0: 150, 1: 150},
+				L3SizeBytes:       16 * 1024 * 1024,
+				PhysicalCoreCount: 2,
+			},
+			{
+				CPUs:              mustParseCPUSet(t, "2-3"),
+				HighestPerf:       map[int]int{2: 150, 3: 150},
+				L3SizeBytes:       16 * 1024 * 1024,
+				PhysicalCoreCount: 2,
+			},
+		},
+	}
+
+	tags := BuildClusterTags(topo)
+	if tags.HasAssignedClusterTags() {
+		t.Fatalf("expected no assigned cluster tags, got %v", tags.ByCPUSet)
+	}
+}
+
+func TestReadCPUModel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cpuinfo")
+	mustWriteFile(t, path, "processor\t: 0\nmodel name\t: AMD Ryzen AI 9 HX 370 w/ Radeon 890M\n")
+	if got := ReadCPUModel(path); got != "AMD Ryzen AI 9 HX 370 w/ Radeon 890M" {
+		t.Fatalf("unexpected cpu model: %q", got)
+	}
+}
+
+func TestClusterAMDPstateMaxFreqMHzListDedupesAndSorts(t *testing.T) {
+	root := t.TempDir()
+	writeCPUFixture(t, root, 0, "0-1", "16384K", "200")
+	writeCPUFixture(t, root, 1, "0-1", "16384K", "198")
+	mustMkdirAll(t, filepath.Join(root, "cpufreq", "policy0"))
+	mustMkdirAll(t, filepath.Join(root, "cpufreq", "policy1"))
+	mustWriteFile(t, filepath.Join(root, "cpufreq", "policy0", "amd_pstate_max_freq"), "5157895\n")
+	mustWriteFile(t, filepath.Join(root, "cpufreq", "policy1", "amd_pstate_max_freq"), "5157895\n")
+
+	topo, err := ReadTopology(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(topo.Clusters) != 1 {
+		t.Fatalf("unexpected cluster count: %d", len(topo.Clusters))
+	}
+	got := topo.Clusters[0].AMDPstateMaxFreqMHzList()
+	if len(got) != 1 || got[0] != 5157 {
+		t.Fatalf("unexpected amd_pstate_max_freq list: %v", got)
 	}
 }
 

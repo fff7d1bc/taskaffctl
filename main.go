@@ -151,6 +151,7 @@ func runTopology(jsonOutput bool) error {
 	if err != nil {
 		return err
 	}
+	topo.CPUModel = ReadCPUModel("/proc/cpuinfo")
 	clusterTags := BuildClusterTags(topo)
 	if jsonOutput {
 		return writeTopologyJSON(topo, clusterTags)
@@ -405,37 +406,45 @@ func summarizePIDAffinity(procRoot string, pid int, maxCPU int) (string, error) 
 }
 
 type topologyJSONOutput struct {
+	CPUModel       string                `json:"cpu_model,omitempty"`
 	Online         string                `json:"online"`
+	ClusterTagNote string                `json:"cluster_tag_note,omitempty"`
 	SpecialTags    []string              `json:"special_tags,omitempty"`
 	UnassignedTags []string              `json:"unassigned_tags,omitempty"`
 	Clusters       []topologyJSONCluster `json:"clusters"`
 }
 
 type topologyJSONCluster struct {
-	CPUs           string   `json:"cpus"`
-	Tags           []string `json:"tags,omitempty"`
-	L3KiB          int64    `json:"l3_kib"`
-	L3PerCoreKiB   float64  `json:"l3_per_core_kib"`
-	PhysicalCores  int      `json:"physical_cores"`
-	AvgHighestPerf float64  `json:"avg_highest_perf"`
-	MinHighestPerf *int     `json:"min_highest_perf,omitempty"`
-	MaxHighestPerf *int     `json:"max_highest_perf,omitempty"`
+	CPUs                string   `json:"cpus"`
+	Tags                []string `json:"tags,omitempty"`
+	L3KiB               int64    `json:"l3_kib"`
+	L3PerCoreKiB        float64  `json:"l3_per_core_kib"`
+	AMDPstateMaxFreqMHz []int64  `json:"amd_pstate_max_freq_mhz,omitempty"`
+	PhysicalCores       int      `json:"physical_cores"`
+	AvgHighestPerf      float64  `json:"avg_highest_perf"`
+	MinHighestPerf      *int     `json:"min_highest_perf,omitempty"`
+	MaxHighestPerf      *int     `json:"max_highest_perf,omitempty"`
 }
 
 func writeTopologyJSON(topo *Topology, clusterTags ClusterTags) error {
 	out := topologyJSONOutput{
+		CPUModel:       topo.CPUModel,
 		Online:         topo.Online.String(),
 		SpecialTags:    clusterTags.Special,
 		UnassignedTags: clusterTags.Unassigned,
 	}
+	if !clusterTags.HasAssignedClusterTags() {
+		out.ClusterTagNote = "no unique cluster tags are available on this topology"
+	}
 	for _, cluster := range topo.Clusters {
 		entry := topologyJSONCluster{
-			CPUs:           cluster.CPUs.String(),
-			Tags:           clusterTags.ByCPUSet[cluster.CPUs.String()],
-			L3KiB:          cluster.L3SizeBytes / 1024,
-			L3PerCoreKiB:   cluster.L3PerCore() / 1024.0,
-			PhysicalCores:  cluster.PhysicalCoreCount,
-			AvgHighestPerf: cluster.AvgHighestPerf(),
+			CPUs:                cluster.CPUs.String(),
+			Tags:                clusterTags.ByCPUSet[cluster.CPUs.String()],
+			L3KiB:               cluster.L3SizeBytes / 1024,
+			L3PerCoreKiB:        cluster.L3PerCore() / 1024.0,
+			AMDPstateMaxFreqMHz: cluster.AMDPstateMaxFreqMHzList(),
+			PhysicalCores:       cluster.PhysicalCoreCount,
+			AvgHighestPerf:      cluster.AvgHighestPerf(),
 		}
 		if v, ok := cluster.MinHighestPerf(); ok {
 			entry.MinHighestPerf = &v
@@ -451,7 +460,13 @@ func writeTopologyJSON(topo *Topology, clusterTags ClusterTags) error {
 }
 
 func writeTopologyYAMLish(topo *Topology, clusterTags ClusterTags) error {
+	if topo.CPUModel != "" {
+		fmt.Printf("cpu_model: %s\n", topo.CPUModel)
+	}
 	fmt.Printf("online: %s\n", topo.Online.String())
+	if !clusterTags.HasAssignedClusterTags() {
+		fmt.Printf("cluster_tag_note: no unique cluster tags are available on this topology\n")
+	}
 	fmt.Printf("special_tags:\n")
 	if len(clusterTags.Special) == 0 {
 		fmt.Printf("  []\n")
@@ -487,6 +502,9 @@ func writeTopologyYAMLish(topo *Topology, clusterTags ClusterTags) error {
 		fmt.Printf("    logical_cpus: %d\n", cluster.CPUs.Count())
 		fmt.Printf("    l3_kib: %d\n", cluster.L3SizeBytes/1024)
 		fmt.Printf("    l3_per_core_kib: %.1f\n", cluster.L3PerCore()/1024.0)
+		if freqs := cluster.AMDPstateMaxFreqMHzList(); len(freqs) != 0 {
+			fmt.Printf("    amd_pstate_max_freq_mhz: %s\n", formatInt64List(freqs))
+		}
 		fmt.Printf("    avg_highest_perf: %.1f\n", cluster.AvgHighestPerf())
 		if hasMin {
 			fmt.Printf("    min_highest_perf: %d\n", minPerf)
@@ -496,6 +514,17 @@ func writeTopologyYAMLish(topo *Topology, clusterTags ClusterTags) error {
 		}
 	}
 	return nil
+}
+
+func formatInt64List(values []int64) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.FormatInt(value, 10))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 func newFlagSet(name string, usage string) *flag.FlagSet {

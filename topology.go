@@ -11,6 +11,7 @@ import (
 )
 
 type Topology struct {
+	CPUModel string
 	Online   CPUSet
 	Clusters []Cluster
 }
@@ -19,6 +20,7 @@ type Cluster struct {
 	Key               string
 	CPUs              CPUSet
 	L3SizeBytes       int64
+	AMDPstateMaxFreqs map[int]int64
 	HighestPerf       map[int]int
 	PhysicalCoreKeys  map[string]struct{}
 	PhysicalCoreCount int
@@ -79,6 +81,7 @@ func ReadTopology(sysfsRoot string) (*Topology, error) {
 		if cluster == nil {
 			cluster = &Cluster{
 				Key:              key,
+				AMDPstateMaxFreqs: map[int]int64{},
 				HighestPerf:      map[int]int{},
 				PhysicalCoreKeys: map[string]struct{}{},
 			}
@@ -87,6 +90,9 @@ func ReadTopology(sysfsRoot string) (*Topology, error) {
 			clusterMap[key] = cluster
 		}
 		cluster.CPUs.Add(cpu)
+		if freq, ok := readOptionalInt64(filepath.Join(sysfsRoot, "cpufreq", fmt.Sprintf("policy%d", cpu), "amd_pstate_max_freq")); ok {
+			cluster.AMDPstateMaxFreqs[cpu] = freq
+		}
 		if perf, ok := readOptionalInt(filepath.Join(cpuDir, "acpi_cppc", "highest_perf")); ok {
 			cluster.HighestPerf[cpu] = perf
 		}
@@ -145,6 +151,29 @@ func (c Cluster) L3PerCore() float64 {
 	return float64(c.L3SizeBytes) / float64(c.PhysicalCoreCount)
 }
 
+func (c Cluster) AMDPstateMaxFreqMHzList() []int64 {
+	if len(c.AMDPstateMaxFreqs) == 0 {
+		return nil
+	}
+	seen := map[int64]struct{}{}
+	out := make([]int64, 0, len(c.AMDPstateMaxFreqs))
+	for _, value := range c.AMDPstateMaxFreqs {
+		mhz := value / 1000
+		if mhz <= 0 {
+			continue
+		}
+		if _, ok := seen[mhz]; ok {
+			continue
+		}
+		seen[mhz] = struct{}{}
+		out = append(out, mhz)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i] < out[j]
+	})
+	return out
+}
+
 func SelectClusterByTag(topo *Topology, tag string) (*ClusterSelection, error) {
 	if topo == nil {
 		return nil, errors.New("nil topology")
@@ -167,6 +196,9 @@ func SelectClusterByTag(topo *Topology, tag string) (*ClusterSelection, error) {
 		return nil, errors.New("no L3 clusters found")
 	}
 	tags := BuildClusterTags(topo)
+	if !tags.HasAssignedClusterTags() {
+		return nil, errors.New("no unique cluster tags are available on this topology")
+	}
 	var matched *Cluster
 	for _, cluster := range topo.Clusters {
 		for _, clusterTag := range tags.ByCPUSet[cluster.CPUs.String()] {
@@ -245,6 +277,15 @@ func BuildClusterTags(topo *Topology) ClusterTags {
 		}
 	}
 	return tags
+}
+
+func (t ClusterTags) HasAssignedClusterTags() bool {
+	for _, list := range t.ByCPUSet {
+		if len(list) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func clustersHaveCompleteCPPC(clusters []Cluster) bool {
@@ -327,11 +368,20 @@ func readCoreKey(cpuDir string, cpu int) string {
 	if coreID == "" {
 		coreID = strconv.Itoa(cpu)
 	}
+	packageID := strconv.Itoa(readPackageID(cpuDir))
+	return packageID + ":" + coreID
+}
+
+func readPackageID(cpuDir string) int {
 	packageID := readTrimmed(filepath.Join(cpuDir, "topology", "physical_package_id"))
 	if packageID == "" {
-		packageID = "0"
+		return 0
 	}
-	return packageID + ":" + coreID
+	value, err := strconv.Atoi(packageID)
+	if err != nil {
+		return 0
+	}
+	return value
 }
 
 func readOptionalInt(path string) (int, bool) {
@@ -346,12 +396,40 @@ func readOptionalInt(path string) (int, bool) {
 	return value, true
 }
 
+func readOptionalInt64(path string) (int64, bool) {
+	data := readTrimmed(path)
+	if data == "" {
+		return 0, false
+	}
+	value, err := strconv.ParseInt(data, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
 func readTrimmed(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+func ReadCPUModel(procCPUInfoPath string) string {
+	data, err := os.ReadFile(procCPUInfoPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "model name\t:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "model name\t:"))
+		}
+		if strings.HasPrefix(line, "Hardware\t:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "Hardware\t:"))
+		}
+	}
+	return ""
 }
 
 func addUniqueExtremaTag(clusters []Cluster, out map[string][]string, tag string, metric func(Cluster) float64, wantMax bool) {
