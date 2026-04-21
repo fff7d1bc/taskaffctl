@@ -13,6 +13,91 @@ This tool therefore mostly figures clusters out from which CPUs share the same L
 
 The current implementation depends on ACPI CPPC being exposed by firmware and is centered around Ryzen CPUs. It has only been tested on Zen5-family CPUs so far. My understanding is that Intel systems tend to expose the efficiency and performance core split more clearly through firmware, but I do not have access to such a system, so there is no Intel-specific handling here and Intel CPUs would go through the same code path.
 
+
+## Topology samples
+
+Mobile Zen5+Zen5c
+
+```
+% taskaffctl --topology
+cpu_model: AMD Ryzen AI 9 HX 370 w/ Radeon 890M
+online: 0-23
+special_tags:
+  - all-cores
+unassigned_tags:
+  []
+clusters:
+  - cpus: 0-3,12-15
+    tags:
+      - highest-perf-cores
+      - least-cores
+      - most-cache
+      - most-cache-per-core
+    physical_cores: 4
+    logical_cpus: 8
+    l3_kib: 16384
+    l3_per_core_kib: 4096.0
+    amd_pstate_max_freq_mhz: [5157]
+    avg_highest_perf: 203.5
+    min_highest_perf: 196
+    max_highest_perf: 208
+  - cpus: 4-11,16-23
+    tags:
+      - least-cache
+      - least-cache-per-core
+      - lowest-perf-cores
+      - most-cores
+    physical_cores: 8
+    logical_cpus: 16
+    l3_kib: 8192
+    l3_per_core_kib: 1024.0
+    amd_pstate_max_freq_mhz: [3289]
+    avg_highest_perf: 125.0
+    min_highest_perf: 125
+    max_highest_perf: 125
+```
+
+Dual CCD Zen5 CPU
+
+```
+% taskaffctl --topology
+cpu_model: AMD EPYC 4545P 16-Core Processor
+online: 0-31
+special_tags:
+  - all-cores
+unassigned_tags:
+  - most-cache
+  - least-cache
+  - most-cache-per-core
+  - least-cache-per-core
+  - most-cores
+  - least-cores
+clusters:
+  - cpus: 0-7,16-23
+    tags:
+      - highest-perf-cores
+    physical_cores: 8
+    logical_cpus: 16
+    l3_kib: 32768
+    l3_per_core_kib: 4096.0
+    amd_pstate_max_freq_mhz: [5472]
+    avg_highest_perf: 222.9
+    min_highest_perf: 206
+    max_highest_perf: 236
+  - cpus: 8-15,24-31
+    tags:
+      - lowest-perf-cores
+    physical_cores: 8
+    logical_cpus: 16
+    l3_kib: 32768
+    l3_per_core_kib: 4096.0
+    amd_pstate_max_freq_mhz: [5472]
+    avg_highest_perf: 183.5
+    min_highest_perf: 166
+    max_highest_perf: 201
+```
+
+## Usage
 ```
 usage:
   taskaffctl --tag TAG -- command...
