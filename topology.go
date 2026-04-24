@@ -69,6 +69,8 @@ func ReadTopology(sysfsRoot string) (*Topology, error) {
 		if err != nil {
 			continue
 		}
+		// Ryzen firmware can report a single cluster_id even when the useful
+		// scheduling boundary is really the set of CPUs sharing one L3 cache.
 		key := readTrimmed(filepath.Join(cacheDir, "shared_cpu_list"))
 		if key == "" {
 			key = readTrimmed(filepath.Join(cacheDir, "shared_cpu_map"))
@@ -186,6 +188,8 @@ func SelectClusterByTag(topo *Topology, tag string) (*ClusterSelection, error) {
 		if topo.Online.IsEmpty() {
 			return nil, errors.New("no online CPUs found")
 		}
+		// all-cores is intentionally outside normal cluster tagging and just means
+		// "restore the full online mask".
 		return &ClusterSelection{
 			Cluster:  Cluster{CPUs: topo.Online},
 			Reliable: true,
@@ -234,6 +238,8 @@ func BuildClusterTags(topo *Topology) ClusterTags {
 		return tags
 	}
 
+	// Performance tags only make sense when every online CPU in every detected
+	// cluster exposed CPPC highest_perf.
 	if clustersHaveCompleteCPPC(topo.Clusters) {
 		addUniqueExtremaTag(topo.Clusters, tags.ByCPUSet, "highest-perf-cores", func(c Cluster) float64 {
 			return c.AvgHighestPerf()
@@ -458,6 +464,8 @@ func addUniqueExtremaTag(clusters []Cluster, out map[string][]string, tag string
 		}
 	}
 	if tied {
+		// Tags are unique by design. If multiple clusters tie for a tag, none of
+		// them get it and the tag moves to unassigned_tags.
 		return
 	}
 	out[clusters[bestIndex].CPUs.String()] = append(out[clusters[bestIndex].CPUs.String()], tag)

@@ -178,6 +178,7 @@ func launchWithCluster(clusterTag string, cmdArgs []string) error {
 	if err != nil {
 		return err
 	}
+	// Use a direct exec so the target keeps the original PID/FD inheritance model.
 	return syscall.Exec(path, cmdArgs, os.Environ())
 }
 
@@ -236,6 +237,8 @@ func applyPIDToCPUSet(pid int, maxCPU int, target CPUSet) (pidAffinityReport, er
 		report.Err = err
 		return report, err
 	}
+	// Affinity is tracked per thread on Linux, so updating an existing PID means
+	// walking /proc/<pid>/task and applying the mask to every current TID.
 	for _, task := range tasks {
 		if err := setAffinity(task.TID, target); err != nil {
 			if isProcRace(err) {
@@ -397,6 +400,8 @@ func summarizePIDAffinity(procRoot string, pid int, maxCPU int) (string, error) 
 			return value, nil
 		}
 	}
+	// A PID can have threads with different masks, so surface that explicitly
+	// instead of pretending the process has a single affinity value.
 	parts := make([]string, 0, len(values))
 	for value := range values {
 		parts = append(parts, value)
@@ -613,6 +618,8 @@ func enforceDoubleDashLongFlags(args []string) error {
 			continue
 		}
 		if len(arg) >= 3 && strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") {
+			// Accept one-letter short flags like -t, but reject accidental long
+			// options written as -tag because they are easy to miss in review.
 			name := arg[1:]
 			if eq := strings.IndexByte(name, '='); eq >= 0 {
 				name = name[:eq]

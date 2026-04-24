@@ -57,6 +57,8 @@ func listTasks(procRoot string, pid int) ([]Task, error) {
 }
 
 func isProcRace(err error) bool {
+	// /proc is inherently racy while processes are exiting, so disappearing
+	// tasks are treated as a normal condition rather than a hard failure.
 	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH)
 }
 
@@ -80,6 +82,8 @@ func processMatchesName(procRoot string, pid int, name string) bool {
 	if name == "" {
 		return false
 	}
+	// /proc/<pid>/comm is kernel-truncated, so also match against the executable
+	// basename when it is available.
 	if readProcessComm(procRoot, pid) == name {
 		return true
 	}
@@ -137,6 +141,8 @@ func expandPIDTree(procRoot string, roots []int) ([]int, error) {
 
 	seen := map[int]struct{}{}
 	queue := append([]int(nil), roots...)
+	// Walk the current parent/child snapshot breadth-first so the output stays
+	// deterministic and includes the roots themselves.
 	for len(queue) > 0 {
 		pid := queue[0]
 		queue = queue[1:]

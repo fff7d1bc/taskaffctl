@@ -160,6 +160,8 @@ func (s CPUSet) CPUs() []int {
 	var cpus []int
 	for wi, word := range s.words {
 		for word != 0 {
+			// Consume only the set bits so large sparse masks do not require
+			// scanning every possible CPU index.
 			bit := bits.TrailingZeros64(word)
 			cpus = append(cpus, wi*64+bit)
 			word &^= 1 << bit
@@ -216,6 +218,8 @@ func (s CPUSet) toBytes() []byte {
 	if len(s.words) == 0 {
 		return make([]byte, 8)
 	}
+	// Linux affinity syscalls use a little-endian bitmask buffer, one uint64
+	// word at a time.
 	out := make([]byte, len(s.words)*8)
 	for i, word := range s.words {
 		base := i * 8
