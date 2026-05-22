@@ -10,7 +10,7 @@ GOPATH := $(BUILD_DIR)/gopath
 GOTMPDIR := $(BUILD_DIR)/tmp
 GOTELEMETRYDIR := $(BUILD_DIR)/telemetry
 GOENV := off
-GOFLAGS := -modcacherw
+GOFLAGS := -modcacherw -buildvcs=false
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
 
