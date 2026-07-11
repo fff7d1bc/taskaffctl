@@ -221,6 +221,21 @@ make
 
 The binary is built into `build/bin/host/taskaffctl`. Go caches and temporary files stay under `build/`.
 
+Run the tests or force a fresh host build with:
+
+```
+make test
+make -B build
+```
+
+For development, build and run the local binary with arguments through the Makefile:
+
+```
+make run ARGS='--topology'
+```
+
+Make defaults to `GOTOOLCHAIN=auto`, preserving Go's automatic toolchain selection. To require the installed toolchain and prevent an automatic toolchain download or switch, use an explicit override such as `make GOTOOLCHAIN=local test`; the installed Go version must satisfy `go.mod`.
+
 Install into `/usr/local/bin` as root or `~/.local/bin` as a normal user:
 
 ```

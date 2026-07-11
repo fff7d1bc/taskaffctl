@@ -4,6 +4,7 @@ BIN_ROOT_DIR := $(BUILD_DIR)/bin
 HOST_BIN_DIR := $(BIN_ROOT_DIR)/host
 HOST_BIN := $(HOST_BIN_DIR)/$(APP)
 GO_SOURCES := $(wildcard *.go)
+GOTOOLCHAIN ?= auto
 GOCACHE := $(BUILD_DIR)/gocache
 GOMODCACHE := $(BUILD_DIR)/gomodcache
 GOPATH := $(BUILD_DIR)/gopath
@@ -21,6 +22,7 @@ export GOTMPDIR
 export GOTELEMETRYDIR
 export GOENV
 export GOFLAGS
+export GOTOOLCHAIN
 export GOTELEMETRY=off
 
 .PHONY: all build test run install clean
@@ -38,7 +40,7 @@ $(HOST_BIN): go.mod $(GO_SOURCES)
 	go build -o "$(HOST_BIN)" .
 
 run: build
-	"$(HOST_BIN)"
+	"$(HOST_BIN)" $(ARGS)
 
 install: build
 	if [ "$$(id -u)" -eq 0 ]; then \
