@@ -209,11 +209,15 @@ func applyExistingPIDs(clusterTag string, pids []int, jsonOutput bool) error {
 			failures = append(failures, fmt.Sprintf("pid %d: %v", pid, err))
 		}
 	}
-	printPIDReports(reports, jsonOutput)
-	if len(failures) != 0 {
-		return errors.New(strings.Join(failures, "; "))
+	reportErr := writePIDReports(os.Stdout, reports, jsonOutput)
+	if reportErr != nil {
+		reportErr = fmt.Errorf("write process reports: %w", reportErr)
 	}
-	return nil
+	var updateErr error
+	if len(failures) != 0 {
+		updateErr = errors.New(strings.Join(failures, "; "))
+	}
+	return errors.Join(updateErr, reportErr)
 }
 
 type pidAffinityReport struct {
@@ -314,11 +318,15 @@ func applyExistingComm(clusterTag string, comm string, jsonOutput bool, pidTree 
 		}
 		matches++
 	}
-	printPIDReports(reports, jsonOutput)
-	if len(failures) != 0 {
-		return errors.New(strings.Join(failures, "; "))
+	reportErr := writePIDReports(os.Stdout, reports, jsonOutput)
+	if reportErr != nil {
+		reportErr = fmt.Errorf("write process reports: %w", reportErr)
 	}
-	return nil
+	var updateErr error
+	if len(failures) != 0 {
+		updateErr = errors.New(strings.Join(failures, "; "))
+	}
+	return errors.Join(updateErr, reportErr)
 }
 
 func readTopologyForSelection(sysfsRoot string, clusterTag string) (*Topology, error) {
@@ -345,7 +353,7 @@ type pidAffinityOutputItem struct {
 	Error  string `json:"error,omitempty"`
 }
 
-func printPIDReports(reports []pidAffinityReport, jsonOutput bool) {
+func writePIDReports(w io.Writer, reports []pidAffinityReport, jsonOutput bool) error {
 	out := pidAffinityOutput{Reports: make([]pidAffinityOutputItem, 0, len(reports))}
 	for _, report := range reports {
 		item := pidAffinityOutputItem{
@@ -364,26 +372,28 @@ func printPIDReports(reports []pidAffinityReport, jsonOutput bool) {
 		out.Reports = append(out.Reports, item)
 	}
 	if jsonOutput {
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		_ = enc.Encode(out)
-		return
+		return enc.Encode(out)
 	}
-	fmt.Printf("reports:\n")
+	var text strings.Builder
+	fmt.Fprint(&text, "reports:\n")
 	for _, item := range out.Reports {
-		fmt.Printf("  - pid: %d\n", item.PID)
-		fmt.Printf("    comm: %s\n", item.Comm)
-		fmt.Printf("    status: %s\n", item.Status)
+		fmt.Fprintf(&text, "  - pid: %d\n", item.PID)
+		fmt.Fprintf(&text, "    comm: %s\n", item.Comm)
+		fmt.Fprintf(&text, "    status: %s\n", item.Status)
 		if item.From != "" {
-			fmt.Printf("    from: %s\n", item.From)
+			fmt.Fprintf(&text, "    from: %s\n", item.From)
 		}
 		if item.To != "" {
-			fmt.Printf("    to: %s\n", item.To)
+			fmt.Fprintf(&text, "    to: %s\n", item.To)
 		}
 		if item.Error != "" {
-			fmt.Printf("    error: %s\n", item.Error)
+			fmt.Fprintf(&text, "    error: %s\n", item.Error)
 		}
 	}
+	_, err := io.WriteString(w, text.String())
+	return err
 }
 
 func summarizePIDAffinity(procRoot string, pid int) (string, error) {
