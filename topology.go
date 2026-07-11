@@ -19,11 +19,17 @@ type Topology struct {
 type Cluster struct {
 	Key               string
 	CPUs              CPUSet
+	DeclaredCPUs      CPUSet
 	L3SizeBytes       int64
 	AMDPstateMaxFreqs map[int]int64
 	HighestPerf       map[int]int
 	PhysicalCoreKeys  map[string]struct{}
 	PhysicalCoreCount int
+}
+
+type onlineCPU struct {
+	ID  int
+	Dir string
 }
 
 type ClusterSelection struct {
@@ -40,56 +46,57 @@ type ClusterTags struct {
 }
 
 func ReadTopology(sysfsRoot string) (*Topology, error) {
-	cpuDirs, err := filepath.Glob(filepath.Join(sysfsRoot, "cpu[0-9]*"))
+	cpus, online, err := readOnlineCPUInventory(sysfsRoot)
 	if err != nil {
-		return nil, fmt.Errorf("scan CPUs: %w", err)
+		return nil, err
 	}
-	sort.Slice(cpuDirs, func(i, j int) bool {
-		return cpuDirID(cpuDirs[i]) < cpuDirID(cpuDirs[j])
-	})
+	if online.IsEmpty() {
+		return nil, errors.New("no online CPUs found")
+	}
 
-	topo := &Topology{}
+	topo := &Topology{Online: online}
 	clusterMap := map[string]*Cluster{}
 
-	for _, cpuDir := range cpuDirs {
-		cpu := cpuDirID(cpuDir)
-		if cpu < 0 {
-			continue
-		}
-		online, err := isCPUOnline(cpuDir, cpu)
-		if err != nil {
-			return nil, err
-		}
-		if !online {
-			continue
-		}
-		topo.Online.Add(cpu)
+	for _, cpuInfo := range cpus {
+		cpu := cpuInfo.ID
+		cpuDir := cpuInfo.Dir
 
 		cacheDir, err := findL3CacheDir(cpuDir)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("cpu %d: find L3 cache: %w", cpu, err)
 		}
 		// Ryzen firmware can report a single cluster_id even when the useful
 		// scheduling boundary is really the set of CPUs sharing one L3 cache.
-		key := readTrimmed(filepath.Join(cacheDir, "shared_cpu_list"))
-		if key == "" {
-			key = readTrimmed(filepath.Join(cacheDir, "shared_cpu_map"))
+		shared, err := readSharedCPUSet(cacheDir)
+		if err != nil {
+			return nil, fmt.Errorf("cpu %d: %w", cpu, err)
 		}
-		if key == "" {
-			key = fmt.Sprintf("cpu%d", cpu)
+		if !shared.Has(cpu) {
+			return nil, fmt.Errorf("cpu %d: L3 shared CPU set %q does not contain the CPU", cpu, shared.String())
+		}
+		key := shared.String()
+		size, err := parseCacheSize(readTrimmed(filepath.Join(cacheDir, "size")))
+		if err != nil {
+			return nil, fmt.Errorf("cpu %d: read L3 cache size: %w", cpu, err)
+		}
+		coreKey, err := readCoreKey(cpuDir, cpu)
+		if err != nil {
+			return nil, err
 		}
 
 		cluster := clusterMap[key]
 		if cluster == nil {
 			cluster = &Cluster{
-				Key:              key,
+				Key:               key,
+				DeclaredCPUs:      shared,
+				L3SizeBytes:       size,
 				AMDPstateMaxFreqs: map[int]int64{},
-				HighestPerf:      map[int]int{},
-				PhysicalCoreKeys: map[string]struct{}{},
+				HighestPerf:       map[int]int{},
+				PhysicalCoreKeys:  map[string]struct{}{},
 			}
-			size, _ := parseCacheSize(readTrimmed(filepath.Join(cacheDir, "size")))
-			cluster.L3SizeBytes = size
 			clusterMap[key] = cluster
+		} else if cluster.L3SizeBytes != size {
+			return nil, fmt.Errorf("cpu %d: inconsistent L3 cache size for shared CPU set %q", cpu, key)
 		}
 		cluster.CPUs.Add(cpu)
 		if freq, ok := readOptionalInt64(filepath.Join(sysfsRoot, "cpufreq", fmt.Sprintf("policy%d", cpu), "amd_pstate_max_freq")); ok {
@@ -98,10 +105,14 @@ func ReadTopology(sysfsRoot string) (*Topology, error) {
 		if perf, ok := readOptionalInt(filepath.Join(cpuDir, "acpi_cppc", "highest_perf")); ok {
 			cluster.HighestPerf[cpu] = perf
 		}
-		cluster.PhysicalCoreKeys[readCoreKey(cpuDir, cpu)] = struct{}{}
+		cluster.PhysicalCoreKeys[coreKey] = struct{}{}
 	}
 
 	for _, cluster := range clusterMap {
+		expected := cluster.DeclaredCPUs.Intersect(topo.Online)
+		if !cluster.CPUs.Equal(expected) {
+			return nil, fmt.Errorf("incomplete L3 cluster %q: observed %q, expected online CPUs %q", cluster.Key, cluster.CPUs.String(), expected.String())
+		}
 		cluster.PhysicalCoreCount = len(cluster.PhysicalCoreKeys)
 		topo.Clusters = append(topo.Clusters, *cluster)
 	}
@@ -109,6 +120,46 @@ func ReadTopology(sysfsRoot string) (*Topology, error) {
 		return topo.Clusters[i].CPUs.CPUs()[0] < topo.Clusters[j].CPUs.CPUs()[0]
 	})
 	return topo, nil
+}
+
+func ReadOnlineCPUSet(sysfsRoot string) (CPUSet, error) {
+	_, online, err := readOnlineCPUInventory(sysfsRoot)
+	if err != nil {
+		return CPUSet{}, err
+	}
+	if online.IsEmpty() {
+		return CPUSet{}, errors.New("no online CPUs found")
+	}
+	return online, nil
+}
+
+func readOnlineCPUInventory(sysfsRoot string) ([]onlineCPU, CPUSet, error) {
+	cpuDirs, err := filepath.Glob(filepath.Join(sysfsRoot, "cpu[0-9]*"))
+	if err != nil {
+		return nil, CPUSet{}, fmt.Errorf("scan CPUs: %w", err)
+	}
+	sort.Slice(cpuDirs, func(i, j int) bool {
+		return cpuDirID(cpuDirs[i]) < cpuDirID(cpuDirs[j])
+	})
+
+	var cpus []onlineCPU
+	var onlineSet CPUSet
+	for _, cpuDir := range cpuDirs {
+		cpu := cpuDirID(cpuDir)
+		if cpu < 0 {
+			continue
+		}
+		online, err := isCPUOnline(cpuDir, cpu)
+		if err != nil {
+			return nil, CPUSet{}, err
+		}
+		if !online {
+			continue
+		}
+		onlineSet.Add(cpu)
+		cpus = append(cpus, onlineCPU{ID: cpu, Dir: cpuDir})
+	}
+	return cpus, onlineSet, nil
 }
 
 func (c Cluster) AvgHighestPerf() float64 {
@@ -349,6 +400,53 @@ func findL3CacheDir(cpuDir string) (string, error) {
 	return "", errors.New("no L3 cache index")
 }
 
+func readSharedCPUSet(cacheDir string) (CPUSet, error) {
+	list := readTrimmed(filepath.Join(cacheDir, "shared_cpu_list"))
+	if list != "" {
+		set, err := ParseCPUSet(list)
+		if err != nil {
+			return CPUSet{}, fmt.Errorf("parse L3 shared_cpu_list: %w", err)
+		}
+		if set.IsEmpty() {
+			return CPUSet{}, errors.New("empty L3 shared_cpu_list")
+		}
+		return set, nil
+	}
+
+	cpuMap := readTrimmed(filepath.Join(cacheDir, "shared_cpu_map"))
+	if cpuMap == "" {
+		return CPUSet{}, errors.New("missing L3 shared_cpu_list and shared_cpu_map")
+	}
+	set, err := parseCPUMap(cpuMap)
+	if err != nil {
+		return CPUSet{}, fmt.Errorf("parse L3 shared_cpu_map: %w", err)
+	}
+	return set, nil
+}
+
+func parseCPUMap(s string) (CPUSet, error) {
+	hexDigits := strings.ReplaceAll(strings.TrimSpace(s), ",", "")
+	if hexDigits == "" {
+		return CPUSet{}, errors.New("empty CPU map")
+	}
+	var set CPUSet
+	for nibbleIndex, i := 0, len(hexDigits)-1; i >= 0; nibbleIndex, i = nibbleIndex+1, i-1 {
+		value, err := strconv.ParseUint(hexDigits[i:i+1], 16, 4)
+		if err != nil {
+			return CPUSet{}, fmt.Errorf("invalid CPU map %q", s)
+		}
+		for bit := 0; bit < 4; bit++ {
+			if value&(1<<bit) != 0 {
+				set.Add(nibbleIndex*4 + bit)
+			}
+		}
+	}
+	if set.IsEmpty() {
+		return CPUSet{}, errors.New("empty CPU map")
+	}
+	return set, nil
+}
+
 func parseCacheSize(s string) (int64, error) {
 	if s == "" {
 		return 0, errors.New("empty cache size")
@@ -366,28 +464,32 @@ func parseCacheSize(s string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if value <= 0 {
+		return 0, fmt.Errorf("cache size must be positive, got %d", value)
+	}
+	const maxInt64 = int64(^uint64(0) >> 1)
+	if value > maxInt64/multiplier {
+		return 0, fmt.Errorf("cache size %q overflows bytes", s)
+	}
 	return value * multiplier, nil
 }
 
-func readCoreKey(cpuDir string, cpu int) string {
+func readCoreKey(cpuDir string, cpu int) (string, error) {
 	coreID := readTrimmed(filepath.Join(cpuDir, "topology", "core_id"))
 	if coreID == "" {
-		coreID = strconv.Itoa(cpu)
+		return "", fmt.Errorf("cpu %d: missing topology/core_id", cpu)
 	}
-	packageID := strconv.Itoa(readPackageID(cpuDir))
-	return packageID + ":" + coreID
-}
-
-func readPackageID(cpuDir string) int {
+	if _, err := strconv.Atoi(coreID); err != nil {
+		return "", fmt.Errorf("cpu %d: invalid topology/core_id %q", cpu, coreID)
+	}
 	packageID := readTrimmed(filepath.Join(cpuDir, "topology", "physical_package_id"))
 	if packageID == "" {
-		return 0
+		return "", fmt.Errorf("cpu %d: missing topology/physical_package_id", cpu)
 	}
-	value, err := strconv.Atoi(packageID)
-	if err != nil {
-		return 0
+	if _, err := strconv.Atoi(packageID); err != nil {
+		return "", fmt.Errorf("cpu %d: invalid topology/physical_package_id %q", cpu, packageID)
 	}
-	return value
+	return packageID + ":" + coreID, nil
 }
 
 func readOptionalInt(path string) (int, bool) {

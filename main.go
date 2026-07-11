@@ -160,7 +160,7 @@ func runTopology(jsonOutput bool) error {
 }
 
 func launchWithCluster(clusterTag string, cmdArgs []string) error {
-	topo, err := ReadTopology("/sys/devices/system/cpu")
+	topo, err := readTopologyForSelection("/sys/devices/system/cpu", clusterTag)
 	if err != nil {
 		return err
 	}
@@ -183,7 +183,7 @@ func launchWithCluster(clusterTag string, cmdArgs []string) error {
 }
 
 func applyExistingPIDs(clusterTag string, pids []int, jsonOutput bool) error {
-	topo, err := ReadTopology("/sys/devices/system/cpu")
+	topo, err := readTopologyForSelection("/sys/devices/system/cpu", clusterTag)
 	if err != nil {
 		return err
 	}
@@ -265,7 +265,7 @@ func applyPIDToCPUSet(pid int, maxCPU int, target CPUSet) (pidAffinityReport, er
 }
 
 func applyExistingComm(clusterTag string, comm string, jsonOutput bool, pidTree bool) error {
-	topo, err := ReadTopology("/sys/devices/system/cpu")
+	topo, err := readTopologyForSelection("/sys/devices/system/cpu", clusterTag)
 	if err != nil {
 		return err
 	}
@@ -317,6 +317,17 @@ func applyExistingComm(clusterTag string, comm string, jsonOutput bool, pidTree 
 		return errors.New(strings.Join(failures, "; "))
 	}
 	return nil
+}
+
+func readTopologyForSelection(sysfsRoot string, clusterTag string) (*Topology, error) {
+	if clusterTag == "all-cores" {
+		online, err := ReadOnlineCPUSet(sysfsRoot)
+		if err != nil {
+			return nil, err
+		}
+		return &Topology{Online: online}, nil
+	}
+	return ReadTopology(sysfsRoot)
 }
 
 type pidAffinityOutput struct {

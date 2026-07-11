@@ -11,7 +11,7 @@ In my testing on Zen5 systems, firmware does not expose this cleanly. CPUs with 
 
 This tool therefore mostly figures clusters out from which CPUs share the same L3 cache. On HX 370, the Zen5 cluster (`0-3,12-15`) has `16384K` of L3 shared by 4 physical cores, while the Zen5c cluster (`4-11,16-23`) has `8192K` of L3 shared by 8 physical cores. On the same kind of system, `topology/cluster_id` is reported as `65535` across the sampled CPUs, while the real split is visible in `cache/index3/shared_cpu_list`.
 
-The current implementation depends on ACPI CPPC being exposed by firmware and is centered around Ryzen CPUs. It has only been tested on Zen5-family CPUs so far. My understanding is that Intel systems tend to expose the efficiency and performance core split more clearly through firmware, but I do not have access to such a system, so there is no Intel-specific handling here and Intel CPUs would go through the same code path.
+The current implementation is centered around Ryzen CPUs and has only been tested on Zen5-family CPUs so far. Performance tags require complete ACPI CPPC `highest_perf` data, while cache-related tags and `all-cores` do not. My understanding is that Intel systems tend to expose the efficiency and performance core split more clearly through firmware, but I do not have access to such a system, so there is no Intel-specific handling here and Intel CPUs would go through the same code path.
 
 
 ## Topology samples

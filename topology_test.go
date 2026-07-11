@@ -209,6 +209,93 @@ func TestResolveClusterSelectionAllCoresWithoutClusters(t *testing.T) {
 	}
 }
 
+func TestReadOnlineCPUSetDoesNotRequireL3Data(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "cpu0")
+	mustMkdirAll(t, base)
+	mustWriteFile(t, filepath.Join(base, "online"), "1\n")
+
+	online, err := ReadOnlineCPUSet(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := online.String(); got != "0" {
+		t.Fatalf("unexpected online CPU set: %s", got)
+	}
+}
+
+func TestReadTopologyRejectsMissingL3Data(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "cpu0")
+	mustMkdirAll(t, base)
+	mustWriteFile(t, filepath.Join(base, "online"), "1\n")
+
+	if _, err := ReadTopology(root); err == nil || !strings.Contains(err.Error(), "find L3 cache") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReadTopologyRejectsInvalidCacheSize(t *testing.T) {
+	root := t.TempDir()
+	writeCPUFixture(t, root, 0, "0", "invalid", "200")
+
+	if _, err := ReadTopology(root); err == nil || !strings.Contains(err.Error(), "L3 cache size") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReadTopologyRejectsNonPositiveCacheSize(t *testing.T) {
+	root := t.TempDir()
+	writeCPUFixture(t, root, 0, "0", "0K", "200")
+
+	if _, err := ReadTopology(root); err == nil || !strings.Contains(err.Error(), "must be positive") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReadTopologyRejectsIncompleteSharedCPUSet(t *testing.T) {
+	root := t.TempDir()
+	writeCPUFixture(t, root, 0, "0-1", "16384K", "200")
+	writeCPUFixture(t, root, 1, "1", "16384K", "200")
+
+	if _, err := ReadTopology(root); err == nil || !strings.Contains(err.Error(), "incomplete L3 cluster") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReadTopologyAcceptsSharedCPUMapFallback(t *testing.T) {
+	root := t.TempDir()
+	writeCPUFixture(t, root, 0, "0-1", "16384K", "200")
+	writeCPUFixture(t, root, 1, "0-1", "16384K", "200")
+	for cpu := 0; cpu < 2; cpu++ {
+		cacheDir := filepath.Join(root, "cpu"+strconv.Itoa(cpu), "cache", "index3")
+		if err := os.Remove(filepath.Join(cacheDir, "shared_cpu_list")); err != nil {
+			t.Fatal(err)
+		}
+		mustWriteFile(t, filepath.Join(cacheDir, "shared_cpu_map"), "00000003\n")
+	}
+
+	topo, err := ReadTopology(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(topo.Clusters) != 1 || topo.Clusters[0].CPUs.String() != "0-1" {
+		t.Fatalf("unexpected clusters: %+v", topo.Clusters)
+	}
+}
+
+func TestReadTopologyRejectsMissingCoreIdentity(t *testing.T) {
+	root := t.TempDir()
+	writeCPUFixture(t, root, 0, "0", "16384K", "200")
+	if err := os.Remove(filepath.Join(root, "cpu0", "topology", "core_id")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ReadTopology(root); err == nil || !strings.Contains(err.Error(), "core_id") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func writeCPUFixture(t *testing.T, root string, cpu int, shared string, l3Size string, highestPerf string) {
 	t.Helper()
 	base := filepath.Join(root, "cpu"+strconv.Itoa(cpu))
