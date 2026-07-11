@@ -197,7 +197,7 @@ func applyExistingPIDs(clusterTag string, pids []int, jsonOutput bool) error {
 	var reports []pidAffinityReport
 	var failures []string
 	for _, pid := range pids {
-		report, err := applyPIDToCPUSet(pid, topo.Online.MaxCPU(), selection.Cluster.CPUs)
+		report, err := applyPIDToCPUSet(pid, selection.Cluster.CPUs)
 		reports = append(reports, report)
 		if err != nil {
 			if isProcRace(err) {
@@ -222,9 +222,9 @@ type pidAffinityReport struct {
 	Err    error
 }
 
-func applyPIDToCPUSet(pid int, maxCPU int, target CPUSet) (pidAffinityReport, error) {
+func applyPIDToCPUSet(pid int, target CPUSet) (pidAffinityReport, error) {
 	report := pidAffinityReport{PID: pid, Comm: readProcessComm("/proc", pid)}
-	before, err := summarizePIDAffinity("/proc", pid, maxCPU)
+	before, err := summarizePIDAffinity("/proc", pid)
 	if err != nil {
 		report.Status = "failed"
 		report.Err = err
@@ -249,7 +249,7 @@ func applyPIDToCPUSet(pid int, maxCPU int, target CPUSet) (pidAffinityReport, er
 			return report, err
 		}
 	}
-	after, err := summarizePIDAffinity("/proc", pid, maxCPU)
+	after, err := summarizePIDAffinity("/proc", pid)
 	if err != nil {
 		report.Status = "failed"
 		report.Err = err
@@ -281,7 +281,6 @@ func applyExistingComm(clusterTag string, comm string, jsonOutput bool, pidTree 
 		return err
 	}
 	matches := 0
-	maxCPU := topo.Online.MaxCPU()
 	target := selection.Cluster.CPUs
 	var failures []string
 	var reports []pidAffinityReport
@@ -302,7 +301,7 @@ func applyExistingComm(clusterTag string, comm string, jsonOutput bool, pidTree 
 		}
 	}
 	for _, pid := range selected {
-		report, err := applyPIDToCPUSet(pid, maxCPU, target)
+		report, err := applyPIDToCPUSet(pid, target)
 		reports = append(reports, report)
 		if err != nil {
 			if isProcRace(err) {
@@ -384,7 +383,7 @@ func printPIDReports(reports []pidAffinityReport, jsonOutput bool) {
 	}
 }
 
-func summarizePIDAffinity(procRoot string, pid int, maxCPU int) (string, error) {
+func summarizePIDAffinity(procRoot string, pid int) (string, error) {
 	tasks, err := listTasks(procRoot, pid)
 	if err != nil {
 		return "", err
@@ -394,7 +393,7 @@ func summarizePIDAffinity(procRoot string, pid int, maxCPU int) (string, error) 
 	}
 	values := map[string]struct{}{}
 	for _, task := range tasks {
-		mask, err := getAffinity(task.TID, maxCPU)
+		mask, err := getAffinity(task.TID)
 		if err != nil {
 			if isProcRace(err) {
 				continue
