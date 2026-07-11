@@ -221,20 +221,25 @@ This is the cleaner integration because the service starts already pinned, inste
 make
 ```
 
-The binary is built into `build/bin/host/taskaffctl`. Go caches and temporary files stay under `build/`.
+The binary is built into `build/<goos>-<goarch>/bin/taskaffctl`. Go caches and
+temporary files stay under the same platform-specific directory in `build/`.
 
-Run the tests or force a fresh host build with:
+Run the tests or force a fresh build with:
 
 ```
 make test
 make -B build
 ```
 
-For development, build and run the local binary with arguments through the Makefile:
+Build a stripped, CGO-disabled binary with:
 
 ```
-make run ARGS='--topology'
+make static
 ```
+
+This produces `build/<goos>-<goarch>/bin/taskaffctl-static` with CGO disabled,
+the `netgo` and `osusergo` build tags, stripped symbols, and an empty build ID.
+On Linux, the result is statically linked.
 
 Make defaults to `GOTOOLCHAIN=auto`, preserving Go's automatic toolchain selection. To require the installed toolchain and prevent an automatic toolchain download or switch, use an explicit override such as `make GOTOOLCHAIN=local test`; the installed Go version must satisfy `go.mod`.
 

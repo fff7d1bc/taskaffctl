@@ -1,20 +1,27 @@
 APP := taskaffctl
 BUILD_DIR := $(CURDIR)/build
-BIN_ROOT_DIR := $(BUILD_DIR)/bin
-HOST_BIN_DIR := $(BIN_ROOT_DIR)/host
-HOST_BIN := $(HOST_BIN_DIR)/$(APP)
-GO_SOURCES := $(wildcard *.go)
 GOTOOLCHAIN ?= auto
-GOCACHE := $(BUILD_DIR)/gocache
-GOMODCACHE := $(BUILD_DIR)/gomodcache
-GOPATH := $(BUILD_DIR)/gopath
-GOTMPDIR := $(BUILD_DIR)/tmp
-GOTELEMETRYDIR := $(BUILD_DIR)/telemetry
-GOENV := off
-GOFLAGS := -modcacherw -buildvcs=false
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
+PLATFORM := $(GOOS)-$(GOARCH)
+PLATFORM_BUILD_DIR := $(BUILD_DIR)/$(PLATFORM)
+BIN_DIR := $(PLATFORM_BUILD_DIR)/bin
+BIN := $(BIN_DIR)/$(APP)
+STATIC_BIN := $(BIN_DIR)/$(APP)-static
+GO_SOURCES := $(wildcard *.go)
+GO_MODULE_FILES := go.mod $(wildcard go.sum)
+GOCACHE := $(PLATFORM_BUILD_DIR)/gocache
+GOMODCACHE := $(PLATFORM_BUILD_DIR)/gomodcache
+GOPATH := $(PLATFORM_BUILD_DIR)/gopath
+GOTMPDIR := $(PLATFORM_BUILD_DIR)/tmp
+GOTELEMETRYDIR := $(PLATFORM_BUILD_DIR)/telemetry
+GOENV := off
+GOFLAGS := -modcacherw -buildvcs=false
+STATIC_TAGS ?= netgo osusergo
+STATIC_LDFLAGS ?= -s -w -buildid=
 
+export GOOS
+export GOARCH
 export GOCACHE
 export GOMODCACHE
 export GOPATH
@@ -25,30 +32,34 @@ export GOFLAGS
 export GOTOOLCHAIN
 export GOTELEMETRY=off
 
-.PHONY: all build test run install clean
+.PHONY: all build static test install clean
 
 all: build
 
-build: $(HOST_BIN)
+build: $(BIN)
+
+static: $(STATIC_BIN)
 
 test:
-	mkdir -p "$(BUILD_DIR)" "$(GOCACHE)" "$(GOMODCACHE)" "$(GOPATH)" "$(GOTMPDIR)" "$(GOTELEMETRYDIR)"
+	mkdir -p "$(GOCACHE)" "$(GOMODCACHE)" "$(GOPATH)" "$(GOTMPDIR)" "$(GOTELEMETRYDIR)"
 	go test ./...
 
-$(HOST_BIN): go.mod $(GO_SOURCES)
-	mkdir -p "$(HOST_BIN_DIR)" "$(GOCACHE)" "$(GOMODCACHE)" "$(GOPATH)" "$(GOTMPDIR)" "$(GOTELEMETRYDIR)"
-	go build -o "$(HOST_BIN)" .
+$(BIN): $(GO_MODULE_FILES) $(GO_SOURCES)
+	mkdir -p "$(BIN_DIR)" "$(GOCACHE)" "$(GOMODCACHE)" "$(GOPATH)" "$(GOTMPDIR)" "$(GOTELEMETRYDIR)"
+	go build -trimpath -o "$(BIN)" .
 
-run: build
-	"$(HOST_BIN)" $(ARGS)
+$(STATIC_BIN): $(GO_MODULE_FILES) $(GO_SOURCES)
+	mkdir -p "$(BIN_DIR)" "$(GOCACHE)" "$(GOMODCACHE)" "$(GOPATH)" "$(GOTMPDIR)" "$(GOTELEMETRYDIR)"
+	CGO_ENABLED=0 go build -trimpath -tags "$(STATIC_TAGS)" -ldflags "$(STATIC_LDFLAGS)" -o "$(STATIC_BIN)" .
+	@echo "static binary: $(STATIC_BIN)"
 
 install: build
 	if [ "$$(id -u)" -eq 0 ]; then \
 		mkdir -p /usr/local/bin; \
-		install -m 0755 "$(HOST_BIN)" "/usr/local/bin/$(APP)"; \
+		install -m 0755 "$(BIN)" "/usr/local/bin/$(APP)"; \
 	else \
 		mkdir -p "$$HOME/.local/bin"; \
-		install -m 0755 "$(HOST_BIN)" "$$HOME/.local/bin/$(APP)"; \
+		install -m 0755 "$(BIN)" "$$HOME/.local/bin/$(APP)"; \
 	fi
 
 clean:
