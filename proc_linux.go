@@ -56,6 +56,24 @@ func listTasks(procRoot string, pid int) ([]Task, error) {
 	return tasks, nil
 }
 
+func validatePIDsExist(procRoot string, pids []int) error {
+	var failures []string
+	for _, pid := range pids {
+		info, err := os.Stat(filepath.Join(procRoot, strconv.Itoa(pid)))
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("pid %d: %v", pid, err))
+			continue
+		}
+		if !info.IsDir() {
+			failures = append(failures, fmt.Sprintf("pid %d: process path is not a directory", pid))
+		}
+	}
+	if len(failures) != 0 {
+		return errors.New(strings.Join(failures, "; "))
+	}
+	return nil
+}
+
 func isProcRace(err error) bool {
 	// /proc is inherently racy while processes are exiting, so disappearing
 	// tasks are treated as a normal condition rather than a hard failure.

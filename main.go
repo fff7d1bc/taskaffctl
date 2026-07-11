@@ -115,6 +115,9 @@ func run(args []string) error {
 		if clusterTag == "" {
 			return errors.New("--tag is required with --pid")
 		}
+		if err := validatePIDsExist("/proc", pids); err != nil {
+			return err
+		}
 		if descendants {
 			pids, err = expandPIDTree("/proc", pids)
 			if err != nil {

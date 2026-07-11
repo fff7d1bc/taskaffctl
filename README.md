@@ -184,7 +184,9 @@ taskaffctl --topology
 taskaffctl --topology --json
 ```
 
-`--pid` applies to the selected process and all of its existing threads. `--descendants` extends the target set to current child processes recursively. `--comm` matches either `/proc/<pid>/comm` or the executable basename from `/proc/<pid>/exe`.
+`--pid` applies to the selected process and all of its existing threads. Explicit PID roots are validated as a set before affinity changes begin. `--descendants` extends the target set to current child processes recursively. `--comm` matches either `/proc/<pid>/comm` or the executable basename from `/proc/<pid>/exe`.
+
+Process and thread discovery uses current `/proc` snapshots. Updates are not transactional: a process can exit or create threads during the operation, and a later failure can leave earlier affinity changes in place. Invalid explicit PID roots and non-race update failures return a nonzero status; processes or threads that disappear after discovery are treated as normal races rather than hard failures.
 
 Example systemd integration for `syncthing@.service`:
 
